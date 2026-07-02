@@ -58,7 +58,7 @@ export async function POST(request: Request) {
     accountId: contact.account_id as string,
     triggerType: 'tag_added',
     contactId,
-    context: { tag_id: tagId ?? null },
+    context: { tag_id: tagId ?? undefined },
   })
 
   return NextResponse.json({ ok: true })
