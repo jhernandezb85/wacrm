@@ -1,8 +1,7 @@
 import { NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/automations/admin-client'
-import { resumePendingExecution } from '@/lib/automations/engine'
+import { resumePendingExecution, runAutomationsForTrigger } from '@/lib/automations/engine'
 import type { AutomationContext } from '@/lib/automations/engine'
-
 /**
  * Drain due `automation_pending_executions` rows. Meant to be hit
  * on a schedule (Vercel Cron / external pinger) — requires a shared
@@ -23,7 +22,6 @@ export async function GET(request: Request) {
   if (supplied !== expected) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
-
   const admin = supabaseAdmin()
   const { data: due, error } = await admin
     .from('automation_pending_executions')
@@ -32,10 +30,8 @@ export async function GET(request: Request) {
     .lte('run_at', new Date().toISOString())
     .order('run_at', { ascending: true })
     .limit(50)
-
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
   if (!due || due.length === 0) return NextResponse.json({ processed: 0 })
-
   let processed = 0
   for (const row of due) {
     const { data: claim } = await admin
@@ -46,7 +42,6 @@ export async function GET(request: Request) {
       .select('id')
       .maybeSingle()
     if (!claim) continue
-
     await resumePendingExecution({
       id: row.id as string,
       automation_id: row.automation_id as string,
@@ -64,5 +59,29 @@ export async function GET(request: Request) {
     processed++
   }
 
-  return NextResponse.json({ processed })
+  // Time-based automations. There's no per-schedule row to poll here —
+  // the cron schedule lives in each automation's trigger_config, and
+  // whether it's actually due *this* minute is decided inside
+  // triggerMatches() (see engine.ts), so every account with at least
+  // one active time_based automation gets one dispatch call; automations
+  // whose schedule doesn't match the current minute are filtered out
+  // there and never execute.
+  let timeBasedAccounts = 0
+  const { data: dueAccounts, error: tbError } = await admin
+    .from('automations')
+    .select('account_id')
+    .eq('trigger_type', 'time_based')
+    .eq('is_active', true)
+
+  if (tbError) {
+    console.error('[automations-cron] time_based account scan failed:', tbError)
+  } else {
+    const accountIds = [...new Set((dueAccounts ?? []).map((a) => a.account_id as string))]
+    for (const accountId of accountIds) {
+      await runAutomationsForTrigger({ accountId, triggerType: 'time_based', context: {} })
+      timeBasedAccounts++
+    }
+  }
+
+  return NextResponse.json({ processed, timeBasedAccountsScanned: timeBasedAccounts })
 }
