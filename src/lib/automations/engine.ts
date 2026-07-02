@@ -581,6 +581,18 @@ async function resolveConversationId(args: ExecuteArgs): Promise<string> {
 }
 
 function triggerMatches(automation: Automation, ctx: AutomationContext | undefined): boolean {
+  if (automation.trigger_type === 'time_based') {
+    const cfg = automation.trigger_config as TimeBasedTriggerConfig
+    if (!cfg?.schedule) return false
+    const now = new Date()
+    const due = isCronDue(cfg.schedule, now)
+    if (!due) return false
+    // Guard against the external pinger calling the cron route more
+    // than once inside the same minute — last_executed_at is
+    // refreshed by increment_automation_execution_count() every time
+    // this automation runs, regardless of trigger type.
+    return notAlreadyRunThisMinute(automation.last_executed_at ?? null, now)
+  }
   if (automation.trigger_type !== 'keyword_match') return true
   const cfg = automation.trigger_config as KeywordMatchTriggerConfig
   if (!cfg?.keywords || cfg.keywords.length === 0) return false
