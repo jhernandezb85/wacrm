@@ -31,7 +31,7 @@ export async function GET(request: Request) {
     .order('run_at', { ascending: true })
     .limit(50)
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
-  if (!due || due.length === 0) return NextResponse.json({ processed: 0 })
+
   let processed = 0
   for (const row of due) {
     const { data: claim } = await admin
